@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bitcycle"
-version = "0.0.1"
+version = "0.1.0"
 description = "Unofficial open implementation of Recycler (hidden-state recycling) for 1.58-bit LLMs"
 readme = "README.md"
 license = "Apache-2.0"
