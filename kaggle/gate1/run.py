@@ -18,8 +18,12 @@ SEEDS = [0]
 SIZE = ["--d-model", "384", "--layers", "8", "--heads", "6", "--ff", "1024",
         "--seq-len", "256", "--batch", "64", "--train-bytes", "600000000", "--data", "/kaggle/working/data"]
 STEPS = 5000
-# (precision, k, steps): baselines also get 2x steps, matching Recycler's two-pass compute.
-ARMS = [(p, k, s) for p in ("ternary", "full") for k, s in ((1, STEPS), (2, STEPS), (1, 2 * STEPS))]
+# Baselines also get 2x steps, matching Recycler's two-pass compute.
+ARMS = [["--precision", p, "--k", str(k), "--steps", str(s)]
+        for p in ("ternary", "full") for k, s in ((1, STEPS), (2, STEPS), (1, 2 * STEPS))]
+# Ablations of the ternary Recycler arm: recycle the pre-norm state; a ternary adapter.
+ARMS += [["--precision", "ternary", "--k", "2", "--steps", str(STEPS), *flag]
+         for flag in (["--recycle", "pre_norm"], ["--adapter", "ternary"])]
 
 subprocess.run(["git", "clone", "--depth", "1", "--branch", REF, "https://github.com/Harukadia/bitcycle"], check=True)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "bitcycle"], check=True)
@@ -30,9 +34,8 @@ subprocess.run([*train, "--prepare-only"], cwd="bitcycle", check=True)
 def queue(gpu: int, arms) -> None:
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
     for seed in SEEDS:
-        for precision, k, steps in arms:
-            cmd = [*train, "--precision", precision, "--k", str(k), "--steps", str(steps), "--seed", str(seed),
-                   "--out", "/kaggle/working/results/gate1"]
+        for arm in arms:
+            cmd = [*train, *arm, "--seed", str(seed), "--out", "/kaggle/working/results/gate1"]
             subprocess.run(cmd, cwd="bitcycle", env=env, check=True)
 
 

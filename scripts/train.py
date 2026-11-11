@@ -33,6 +33,8 @@ class Config:
     run: str = ""
     precision: str = "ternary"  # full | ternary
     k: int = 2  # 1 = baseline
+    recycle: str = "post_norm"  # post_norm | pre_norm (ablation)
+    adapter: str = "full"  # full | ternary (ablation)
     seed: int = 0
     steps: int = 3000
     batch: int = 32
@@ -52,7 +54,8 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     def name(self) -> str:
-        return self.run or f"{self.precision}_k{self.k}_steps{self.steps}_seed{self.seed}"
+        ablations = ("_prenorm" if self.recycle == "pre_norm" else "") + ("_ternaryadapter" if self.adapter == "ternary" else "")
+        return self.run or f"{self.precision}_k{self.k}_steps{self.steps}_seed{self.seed}{ablations}"
 
 
 def pack(docs, eos: int, seq_len: int):
@@ -86,7 +89,10 @@ def make_model(cfg: Config) -> RecyclerLM:
     base = AutoModelForCausalLM.from_config(config)
     if cfg.precision == "ternary":
         to_bitlinear(base)
-    return RecyclerLM(base).to(cfg.device)
+    model = RecyclerLM(base, recycle=cfg.recycle)
+    if cfg.adapter == "ternary":
+        to_bitlinear(model.adapter)
+    return model.to(cfg.device)
 
 
 @torch.no_grad()
