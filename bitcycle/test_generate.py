@@ -28,7 +28,7 @@ def test_cached_decode_matches_full_recompute(model, ids, k_prefill):
     with torch.no_grad():
         expected = no_cache_logits(model, ids, 4, k_prefill)
     got = teacher_forced_logits(model, ids, prompt_len=4, k_prefill=k_prefill)
-    assert torch.allclose(got, expected, atol=1e-10)
+    torch.testing.assert_close(got, expected, rtol=0, atol=1e-10)
 
 
 def test_training_with_prompt_reset_matches_single_pass_prefill(model, ids):
@@ -37,7 +37,7 @@ def test_training_with_prompt_reset_matches_single_pass_prefill(model, ids):
     with torch.no_grad():
         *_, (trained, _) = multi_pass(model, ids, k=ids.shape[1], reset_mask=reset)
     decoded = teacher_forced_logits(model, ids, prompt_len=4, k_prefill=1)
-    assert torch.allclose(trained, decoded, atol=1e-10)
+    torch.testing.assert_close(trained, decoded, rtol=0, atol=1e-10)
 
 
 def test_recurrent_nll_scores_tokens_after_the_prompt(model, ids):
