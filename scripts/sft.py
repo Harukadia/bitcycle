@@ -10,7 +10,7 @@ Arms, trained on the same data for the same steps:
 The backbone is the bf16 master checkpoint made ternary by to_bitlinear, bit for bit
 transformers' own BitNet quantizer. Examples use lm-eval's gsm8k format; prompt positions get
 no loss and no recycled input, which is how generate(k_prefill=1) decodes. Only the arm's
-parameters train (float32); on a GPU the backbone runs in float16 with gradient checkpointing.
+parameters train. Everything runs in float32 (see load_base); on a GPU with gradient checkpointing.
 Resumable like scripts/train.py; the log is JSONL in --out, the evaluation <run>_eval.json.
 """
 
@@ -103,14 +103,16 @@ def make_model(cfg: Config, base: nn.Module) -> RecyclerLM:
     return model.to(cfg.device)
 
 
-def load_base(name: str, dtype: torch.dtype) -> nn.Module:
-    """bf16 master weights made ternary by to_bitlinear.
+def load_base(name: str) -> nn.Module:
+    """bf16 master weights made ternary by to_bitlinear, in float32.
 
+    Not float16: on GSM8K text 2B4T's relu2(gate) * up reaches 1.7e10 and its residual stream
+    1.6e5, past float16's 65504, so every logit is NaN. Kaggle's T4 and P100 have no bfloat16.
     transformers' own loader would quantize too, but needs accelerate and on CPU torch.compile.
     """
     config = AutoConfig.from_pretrained(name)
     config.quantization_config = None
-    return to_bitlinear(AutoModelForCausalLM.from_pretrained(name, config=config, dtype=dtype))
+    return to_bitlinear(AutoModelForCausalLM.from_pretrained(name, config=config, dtype=torch.float32))
 
 
 def lr_at(cfg: Config, step: int) -> float:
@@ -133,14 +135,11 @@ def train(cfg: Config, model: RecyclerLM, data) -> RecyclerLM:
     log_path, ckpt_path = out / f"{cfg.name()}.jsonl", out / f"{cfg.name()}.pt"
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=0.0)
-    cuda = cfg.device.startswith("cuda")
-    scaler = torch.amp.GradScaler(enabled=cuda)
     step = 0
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=cfg.device)
         model.load_state_dict(state["trainable"], strict=False)
         opt.load_state_dict(state["opt"])
-        scaler.load_state_dict(state["scaler"])
         step = state["step"]
     else:
         log(log_path, {"type": "config", **asdict(cfg), "run": cfg.name(), "trainable": sum(p.numel() for p in params)})
@@ -154,14 +153,11 @@ def train(cfg: Config, model: RecyclerLM, data) -> RecyclerLM:
         ids, labels, reset = (t.to(cfg.device) for t in collate(batch))
         for group in opt.param_groups:
             group["lr"] = lr_at(cfg, step)
-        with torch.autocast("cuda", dtype=torch.float16, enabled=cuda):
-            loss, metrics = multi_pass_loss(model, ids, labels, k=cfg.passes(), reset_mask=reset)
+        loss, metrics = multi_pass_loss(model, ids, labels, k=cfg.passes(), reset_mask=reset)
         opt.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
-        scaler.unscale_(opt)
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(params, 1.0)
-        scaler.step(opt)
-        scaler.update()
+        opt.step()
         step += 1
 
         if cfg.log_every and step % cfg.log_every == 0:
@@ -170,8 +166,7 @@ def train(cfg: Config, model: RecyclerLM, data) -> RecyclerLM:
                            "lr": lr_at(cfg, step - 1), "steps_per_s": round(rate, 3)})
         if step % cfg.save_every == 0 or step == stop:
             trainable = {n: p.detach() for n, p in model.named_parameters() if p.requires_grad}
-            torch.save({"trainable": trainable, "opt": opt.state_dict(), "scaler": scaler.state_dict(), "step": step},
-                       ckpt_path)
+            torch.save({"trainable": trainable, "opt": opt.state_dict(), "step": step}, ckpt_path)
     model.eval()
     return model
 
@@ -198,14 +193,13 @@ def main() -> None:
     parser.add_argument("--eval-only", action="store_true", help="evaluate the saved run (or the base model)")
     args = parser.parse_args()
     cfg = Config(**{f.name: getattr(args, f.name) for f in fields(Config)})
-    cuda = cfg.device.startswith("cuda")
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model)
-    base = load_base(cfg.model, torch.float16 if cuda else torch.float32)
+    base = load_base(cfg.model)
     if cfg.arm == "base":
         model = RecyclerLM(base).to(cfg.device)  # zero adapter: exactly the base model
     else:
-        if cuda:
+        if cfg.device.startswith("cuda"):
             base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         model = make_model(cfg, base)
         if args.eval_only:

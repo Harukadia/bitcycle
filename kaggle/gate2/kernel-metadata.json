@@ -1,0 +1,15 @@
+{
+  "id": "harukadia/bitcycle-gate2",
+  "title": "bitcycle-gate2",
+  "code_file": "run.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": ["harukadia/bitcycle-gate2"],
+  "model_sources": []
+}
