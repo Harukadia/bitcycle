@@ -61,6 +61,21 @@ out = generate(model, ids[:, :8], max_new_tokens=32, k_prefill=1)
 
 # Honest metric: NLL under the real decode recurrence, not the k-pass training loss
 nll = recurrent_nll(model, ids, prompt_len=8)
+
+# Batches of different lengths: left-pad the prompts and pass the attention mask
+mask = torch.ones_like(ids[:, :8])
+out = generate(model, ids[:, :8], attention_mask=mask, max_new_tokens=32)
+```
+
+Evaluation with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
+(`pip install "bitcycle[eval] @ git+https://github.com/Harukadia/bitcycle"`) scores and
+generates under the same exact recurrence:
+
+```python
+import lm_eval
+from bitcycle.harness import RecyclerEval
+
+lm_eval.simple_evaluate(model=RecyclerEval(model, tokenizer), tasks=["gsm8k", "arc_challenge"])
 ```
 
 For SFT with single-pass prefill, pass `reset_mask` marking prompt positions (and
@@ -70,7 +85,9 @@ exactly (tested). The same mask marks document starts in packed pretraining.
 ## Correctness
 
 All tests run on CPU in float64 against tiny random Llama, Qwen2, and ternary
-BitNet models, so any mismatch is a logic bug, not rounding.
+BitNet models, with both recycle points, so any mismatch is a logic bug, not rounding.
+(Hugging Face computes RMSNorm and the eager softmax in float32 even in float64 models;
+the test models use float64 versions of both.)
 
 | Property | Test |
 |---|---|
@@ -80,17 +97,19 @@ BitNet models, so any mismatch is a logic bug, not rounding.
 | Training with a prompt reset mask equals single-pass-prefill decoding | `test_generate.py` |
 | Frozen backbone: only the adapter gets gradients; skipping autograd in pass 1 changes nothing | `test_multipass.py` |
 | Ternary weights, per-token int8 activations, straight-through gradients | `test_quant.py` |
+| Left-padded batches score and generate each row as if it were alone | `test_generate.py` |
+| lm-eval adapter: log-likelihoods equal the recurrent NLL; generation equals per-request greedy decoding | `test_harness.py` |
 
 ```bash
-pip install -e ".[test]" && pytest -q
+pip install -e ".[test,eval]" && pytest -q
 ```
 
 ## Choices the paper leaves open
 
 | Question | bitcycle default | Why |
 |---|---|---|
-| Recycle the top state before or after the final norm? | After (`last_hidden_state`) | No hooks needed; the adapter's own RMSNorm makes the two nearly equivalent |
-| Quantize the adapter in ternary models? | No, keep it full precision | It is d x d (6.6M params at d = 2560). Keeping the backbone's ternary weights untouched lets existing 1-bit kernels run unchanged, and keeps quantization error out of the recurrence |
+| Recycle the top state before or after the final norm? | After (`last_hidden_state`) | No hooks needed; the adapter's own RMSNorm makes the two nearly equivalent. `RecyclerLM(base, recycle="pre_norm")` recycles the final norm's input instead; Gate 1 compares the two |
+| Quantize the adapter in ternary models? | No, keep it full precision | It is d x d (6.6M params at d = 2560). Keeping the backbone's ternary weights untouched lets existing 1-bit kernels run unchanged, and keeps quantization error out of the recurrence. `scripts/train.py --adapter ternary` trains a ternary one for comparison in Gate 1 |
 | Adapter bias, RMSNorm eps | No bias, eps 1e-6 | Smallest choice; zero-init then gives an exact identity |
 | Packed sequences | Recycled state reset at document starts | Prevents state leaking across documents |
 
@@ -99,6 +118,7 @@ pip install -e ".[test]" && pytest -q
 1. Gate 0: implementation and exactness tests (this release)
 2. Gate 1: tiny 2x2 study, {fp16, ternary} x {baseline, Recycler}
 3. Gate 2: retrofit BitNet b1.58 2B4T with an adapter-only SFT and evaluate on math and reasoning
+   (`scripts/sft.py`; `to_bitlinear` on the bf16 master weights is bit for bit transformers' BitNet quantizer)
 4. Gate 3: continued pretraining retrofit (compute permitting)
 5. Gate 4: CPU inference with bitnet.cpp
 

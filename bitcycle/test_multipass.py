@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+from bitcycle.conftest import top_states
 from bitcycle.multipass import multi_pass, multi_pass_loss
 from bitcycle.recycler import RecyclerLM, recycle_shift
 
@@ -10,8 +11,8 @@ def exact_recurrence_logits(model, ids, reset_mask=None):
     emb = model.base.get_input_embeddings()(ids)
     inputs, hs = emb[:, :1], []
     for t in range(ids.shape[1]):
-        h = model.base.get_decoder()(inputs_embeds=inputs).last_hidden_state[:, -1]
-        hs.append(h)
+        h, post = (s[:, -1] for s in top_states(model, inputs))
+        hs.append(post)
         if t + 1 < ids.shape[1]:
             r = model.adapter(h)
             if reset_mask is not None:
@@ -27,14 +28,14 @@ def ce(logits, ids):
 def test_enough_passes_recover_the_exact_recurrence(model, ids):
     with torch.no_grad():
         *_, (logits, _) = multi_pass(model, ids, k=ids.shape[1])
-        assert torch.allclose(logits, exact_recurrence_logits(model, ids), atol=1e-10)
+        torch.testing.assert_close(logits, exact_recurrence_logits(model, ids), rtol=0, atol=1e-10)
 
 
 def test_pass_k_is_exact_up_to_position_k(model, ids):
     with torch.no_grad():
         *_, (logits, _) = multi_pass(model, ids, k=3)
         exact = exact_recurrence_logits(model, ids)
-    assert torch.allclose(logits[:, :3], exact[:, :3], atol=1e-10)
+    torch.testing.assert_close(logits[:, :3], exact[:, :3], rtol=0, atol=1e-10)
     assert not torch.allclose(logits[:, 3:], exact[:, 3:], atol=1e-10)
 
 
@@ -43,7 +44,7 @@ def test_reset_mask_restarts_the_recurrence(model, ids):
     reset[:, 5] = True
     with torch.no_grad():
         *_, (logits, _) = multi_pass(model, ids, k=ids.shape[1], reset_mask=reset)
-        assert torch.allclose(logits, exact_recurrence_logits(model, ids, reset), atol=1e-10)
+        torch.testing.assert_close(logits, exact_recurrence_logits(model, ids, reset), rtol=0, atol=1e-10)
 
 
 def test_loss_sums_next_token_loss_over_passes(model, ids):

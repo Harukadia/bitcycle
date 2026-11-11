@@ -17,26 +17,48 @@ class RecycleAdapter(nn.Module):
         nn.init.zeros_(self.proj.weight)  # model == base model at init
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self.proj(self.norm(h))
+        # In the adapter's own dtype: it may train in float32 on a float16 backbone.
+        return self.proj(self.norm(h.to(self.proj.weight.dtype)))
 
 
 class RecyclerLM(nn.Module):
-    """Wraps a Hugging Face causal LM and adds the recycle adapter."""
+    """Wraps a Hugging Face causal LM and adds the recycle adapter.
 
-    def __init__(self, base: nn.Module):
+    recycle picks the top-layer state fed back: "post_norm" (the decoder's output) or
+    "pre_norm" (the residual stream entering the final norm, `decoder.norm`).
+    """
+
+    def __init__(self, base: nn.Module, recycle: str = "post_norm"):
         super().__init__()
+        assert recycle in ("post_norm", "pre_norm"), recycle
         self.base = base
+        self.recycle = recycle
         weight = base.get_input_embeddings().weight
         self.adapter = RecycleAdapter(base.config.hidden_size).to(weight.device, weight.dtype)
 
-    def pass_once(self, input_ids, recycled=None, *, past_key_values=None, use_cache=False):
-        """One backbone pass. Returns (logits, post-norm top hidden state, cache)."""
+    def pass_once(self, input_ids, recycled=None, *, attention_mask=None, position_ids=None,
+                  past_key_values=None, use_cache=False, logits_to_keep: int = 0):
+        """One backbone pass. Returns (logits, the top-layer state to recycle, cache).
+
+        logits_to_keep > 0 computes logits for only the last that many positions (0: all).
+        """
         x = self.base.get_input_embeddings()(input_ids)
         if recycled is not None:
-            x = x + recycled
-        out = self.base.get_decoder()(inputs_embeds=x, past_key_values=past_key_values, use_cache=use_cache)
-        h = out.last_hidden_state
-        return self.base.get_output_embeddings()(h), h, out.past_key_values
+            x = x + recycled.to(x.dtype)
+        decoder = self.base.get_decoder()
+        seen = []
+        hook = None
+        if self.recycle == "pre_norm":
+            hook = decoder.norm.register_forward_hook(lambda module, args, out: seen.append(args[0]))
+        try:
+            out = decoder(inputs_embeds=x, attention_mask=attention_mask, position_ids=position_ids,
+                          past_key_values=past_key_values, use_cache=use_cache)
+        finally:
+            if hook is not None:
+                hook.remove()
+        top = out.last_hidden_state
+        logits = self.base.get_output_embeddings()(top[:, -logits_to_keep:])
+        return logits, seen[0] if seen else top, out.past_key_values
 
 
 def recycle_shift(h: torch.Tensor, adapter: RecycleAdapter, reset_mask=None) -> torch.Tensor:

@@ -1,7 +1,9 @@
 """BitNet b1.58 quantization-aware training: ternary weights, int8 activations.
 
-Matches transformers' online BitNet quantizer (WeightQuant / ActQuant), but
-computes in the input dtype so float64 tests stay exact.
+Bit for bit the operations of transformers' online BitNet quantizer (WeightQuant /
+ActQuant): computed in float32 and cast back, scales applied as reciprocals. Released
+BitNet weights sit on rounding ties, where other orders flip ternary values. Unlike
+transformers, float64 inputs stay float64, so float64 tests stay exact.
 """
 
 import torch
@@ -9,16 +11,22 @@ import torch.nn.functional as F
 from torch import nn
 
 
+def _wide(x: torch.Tensor) -> torch.Tensor:
+    return x.to(torch.promote_types(x.dtype, torch.float32))
+
+
 def quantize_weights(w: torch.Tensor) -> torch.Tensor:
     """Ternary absmean quantization: values land on {-1, 0, +1} * mean(|w|)."""
-    scale = w.abs().mean().clamp(min=1e-5)
-    return (w / scale).round().clamp(-1, 1) * scale
+    x = _wide(w)
+    scale = 1 / x.abs().mean().clamp(min=1e-5)
+    return ((x * scale).round().clamp(-1, 1) / scale).to(w.dtype)
 
 
 def quantize_activations(x: torch.Tensor) -> torch.Tensor:
     """Per-token int8 absmax quantization over the last dimension."""
-    scale = 127 / x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
-    return (x * scale).round().clamp(-128, 127) / scale
+    y = _wide(x)
+    scale = 127 / y.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
+    return ((y * scale).round().clamp(-128, 127) / scale).to(x.dtype)
 
 
 class BitLinear(nn.Linear):

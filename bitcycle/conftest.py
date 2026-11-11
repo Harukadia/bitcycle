@@ -1,9 +1,37 @@
 import pytest
 import torch
-from transformers import AutoModelForCausalLM, BitNetConfig, LlamaConfig, Qwen2Config
+from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
+from transformers import (AttentionInterface, AutoModelForCausalLM, BitNetConfig, LlamaConfig,
+                          PreTrainedTokenizerFast, Qwen2Config)
+from transformers.masking_utils import AttentionMaskInterface, eager_mask
 
 from bitcycle.quant import to_bitlinear
 from bitcycle.recycler import RecyclerLM
+
+# Hugging Face computes RMSNorm and the eager softmax in float32 even in float64 models.
+# Two equivalent computation orders then differ by float32 rounding on some CPUs (CI failed
+# at 1e-10; ternary models can even flip an int8 activation). The tests run everything in
+# float64 instead, so a mismatch is a logic bug, not rounding.
+
+
+def float64_attention(module, query, key, value, attention_mask, scaling, dropout=0.0, **kwargs):
+    """Eager attention (repeat_kv, scaled scores, mask, softmax) without the float32 softmax."""
+    key = key.repeat_interleave(module.num_key_value_groups, dim=1)
+    value = value.repeat_interleave(module.num_key_value_groups, dim=1)
+    weights = query @ key.transpose(2, 3) * scaling
+    if attention_mask is not None:
+        weights = weights + attention_mask
+    weights = weights.softmax(-1)
+    return (weights @ value).transpose(1, 2).contiguous(), weights
+
+
+AttentionInterface.register("float64", float64_attention)
+AttentionMaskInterface.register("float64", eager_mask)  # the same additive causal mask as eager
+
+
+def float64_norm(norm, x):
+    """Hugging Face RMSNorm without the float32 round trip."""
+    return norm.weight * (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + norm.variance_epsilon))
 
 TINY = dict(
     vocab_size=64,
@@ -28,8 +56,11 @@ CONFIGS = {
 def make_base(arch: str):
     torch.manual_seed(0)
     config = CONFIGS[arch]()
-    config._attn_implementation = "eager"
+    config._attn_implementation = "float64"
     base = AutoModelForCausalLM.from_config(config).double().eval()
+    for module in base.modules():
+        if hasattr(module, "variance_epsilon"):  # the model's RMSNorms
+            module.forward = lambda x, norm=module: float64_norm(norm, x)
     if arch.endswith("_ternary"):
         to_bitlinear(base)
     return base
@@ -42,14 +73,39 @@ def randomize_adapter(model: RecyclerLM) -> RecyclerLM:
     return model
 
 
+def top_states(model: RecyclerLM, inputs_embeds):
+    """Reference for tests: (the state `model` recycles, the post-norm state) at every position."""
+    decoder = model.base.get_decoder()
+    seen = []
+    hook = decoder.norm.register_forward_hook(lambda module, args, out: seen.append(args[0]))
+    post = decoder(inputs_embeds=inputs_embeds).last_hidden_state
+    hook.remove()
+    return (seen[0] if model.recycle == "pre_norm" else post), post
+
+
 @pytest.fixture(params=list(CONFIGS))
 def base(request):
     return make_base(request.param)
 
 
+@pytest.fixture(params=["post_norm", "pre_norm"])
+def model(base, request):
+    return randomize_adapter(RecyclerLM(base, recycle=request.param))
+
+
+def char_tokenizer():
+    """One token per character, eos = 0; fits the test models' 64-token vocabulary."""
+    chars = "abcdefghijklmnopqrstuvwxyz .,?!"
+    vocab = {"<eos>": 0, **{c: i + 1 for i, c in enumerate(chars)}}
+    t = Tokenizer(models.WordLevel(vocab, unk_token="<eos>"))
+    t.pre_tokenizer = pre_tokenizers.Split(Regex("."), "isolated")
+    t.decoder = decoders.Fuse()
+    return PreTrainedTokenizerFast(tokenizer_object=t, eos_token="<eos>", clean_up_tokenization_spaces=False)
+
+
 @pytest.fixture
-def model(base):
-    return randomize_adapter(RecyclerLM(base))
+def tok():
+    return char_tokenizer()
 
 
 @pytest.fixture
