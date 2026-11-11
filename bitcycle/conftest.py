@@ -42,14 +42,24 @@ def randomize_adapter(model: RecyclerLM) -> RecyclerLM:
     return model
 
 
+def top_states(model: RecyclerLM, inputs_embeds):
+    """Reference for tests: (the state `model` recycles, the post-norm state) at every position."""
+    decoder = model.base.get_decoder()
+    seen = []
+    hook = decoder.norm.register_forward_hook(lambda module, args, out: seen.append(args[0]))
+    post = decoder(inputs_embeds=inputs_embeds).last_hidden_state
+    hook.remove()
+    return (seen[0] if model.recycle == "pre_norm" else post), post
+
+
 @pytest.fixture(params=list(CONFIGS))
 def base(request):
     return make_base(request.param)
 
 
-@pytest.fixture
-def model(base):
-    return randomize_adapter(RecyclerLM(base))
+@pytest.fixture(params=["post_norm", "pre_norm"])
+def model(base, request):
+    return randomize_adapter(RecyclerLM(base, recycle=request.param))
 
 
 @pytest.fixture

@@ -89,8 +89,8 @@ pip install -e ".[test]" && pytest -q
 
 | Question | bitcycle default | Why |
 |---|---|---|
-| Recycle the top state before or after the final norm? | After (`last_hidden_state`) | No hooks needed; the adapter's own RMSNorm makes the two nearly equivalent |
-| Quantize the adapter in ternary models? | No, keep it full precision | It is d x d (6.6M params at d = 2560). Keeping the backbone's ternary weights untouched lets existing 1-bit kernels run unchanged, and keeps quantization error out of the recurrence |
+| Recycle the top state before or after the final norm? | After (`last_hidden_state`) | No hooks needed; the adapter's own RMSNorm makes the two nearly equivalent. `RecyclerLM(base, recycle="pre_norm")` recycles the final norm's input instead; Gate 1 compares the two |
+| Quantize the adapter in ternary models? | No, keep it full precision | It is d x d (6.6M params at d = 2560). Keeping the backbone's ternary weights untouched lets existing 1-bit kernels run unchanged, and keeps quantization error out of the recurrence. `scripts/train.py --adapter ternary` trains a ternary one for comparison in Gate 1 |
 | Adapter bias, RMSNorm eps | No bias, eps 1e-6 | Smallest choice; zero-init then gives an exact identity |
 | Packed sequences | Recycled state reset at document starts | Prevents state leaking across documents |
 

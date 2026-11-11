@@ -12,9 +12,18 @@ def test_zero_init_adapter_reproduces_base_model(base, ids):
     assert torch.equal(logits2, expected)
 
 
-def test_pass_once_returns_post_norm_top_hidden_state(model, ids):
-    _, h, _ = model.pass_once(ids, None)
-    assert torch.equal(h, model.base.get_decoder()(ids).last_hidden_state)
+def test_pass_once_returns_post_norm_top_hidden_state(base, ids):
+    _, h, _ = RecyclerLM(base).pass_once(ids, None)
+    assert torch.equal(h, base.get_decoder()(ids).last_hidden_state)
+
+
+def test_pre_norm_recycles_the_state_before_the_final_norm(base, ids):
+    logits, h, _ = RecyclerLM(base, recycle="pre_norm").pass_once(ids, None)
+    decoder = base.get_decoder()
+    post = decoder(ids).last_hidden_state
+    assert not torch.allclose(h, post)
+    assert torch.allclose(decoder.norm(h), post)
+    assert torch.equal(logits, base(ids).logits)
 
 
 def test_recycle_shift_feeds_previous_position(model, ids):

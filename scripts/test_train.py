@@ -37,6 +37,19 @@ def test_make_model_quantizes_only_the_ternary_arm(tmp_path):
     assert ternary.base.get_output_embeddings().weight is ternary.base.get_input_embeddings().weight
 
 
+def test_make_model_applies_the_ablations(tmp_path):
+    model = make_model(tiny(tmp_path, recycle="pre_norm", adapter="ternary"))
+    assert model.recycle == "pre_norm"
+    assert isinstance(model.adapter.proj, BitLinear)
+    assert not isinstance(make_model(tiny(tmp_path)).adapter.proj, BitLinear)
+
+
+def test_run_names_tell_ablations_apart_and_keep_the_default_name(tmp_path):
+    assert tiny(tmp_path, run="").name() == "ternary_k2_steps6_seed0"
+    assert tiny(tmp_path, run="", recycle="pre_norm").name() == "ternary_k2_steps6_seed0_prenorm"
+    assert tiny(tmp_path, run="", adapter="ternary").name() == "ternary_k2_steps6_seed0_ternaryadapter"
+
+
 def test_evaluate_is_the_mean_recurrent_nll(tmp_path):
     model = make_model(tiny(tmp_path))
     torch.nn.init.normal_(model.adapter.proj.weight, std=0.5)

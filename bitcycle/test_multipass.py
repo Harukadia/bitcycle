@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+from bitcycle.conftest import top_states
 from bitcycle.multipass import multi_pass, multi_pass_loss
 from bitcycle.recycler import RecyclerLM, recycle_shift
 
@@ -10,8 +11,8 @@ def exact_recurrence_logits(model, ids, reset_mask=None):
     emb = model.base.get_input_embeddings()(ids)
     inputs, hs = emb[:, :1], []
     for t in range(ids.shape[1]):
-        h = model.base.get_decoder()(inputs_embeds=inputs).last_hidden_state[:, -1]
-        hs.append(h)
+        h, post = (s[:, -1] for s in top_states(model, inputs))
+        hs.append(post)
         if t + 1 < ids.shape[1]:
             r = model.adapter(h)
             if reset_mask is not None:

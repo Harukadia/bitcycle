@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from bitcycle.conftest import top_states
 from bitcycle.generate import generate, recurrent_nll, teacher_forced_logits
 from bitcycle.multipass import multi_pass
 from bitcycle.recycler import RecyclerLM, recycle_shift
@@ -8,16 +9,18 @@ from bitcycle.recycler import RecyclerLM, recycle_shift
 
 def no_cache_logits(model, ids, prompt_len, k_prefill):
     """Reference decode: recompute the whole prefix at every step, no KV cache."""
-    decoder = model.base.get_decoder()
     emb = model.base.get_input_embeddings()(ids)
     inputs = emb[:, :prompt_len]
     if k_prefill == 2:
-        inputs = inputs + recycle_shift(decoder(inputs_embeds=inputs).last_hidden_state, model.adapter)
-    hs = list(decoder(inputs_embeds=inputs).last_hidden_state.unbind(1))
+        inputs = inputs + recycle_shift(top_states(model, inputs)[0], model.adapter)
+    h, post = top_states(model, inputs)
+    hs, posts = [h[:, -1]], list(post.unbind(1))
     for t in range(prompt_len, ids.shape[1]):
         inputs = torch.cat([inputs, emb[:, t : t + 1] + model.adapter(hs[-1])[:, None]], dim=1)
-        hs.append(decoder(inputs_embeds=inputs).last_hidden_state[:, -1])
-    return model.base.get_output_embeddings()(torch.stack(hs, dim=1))
+        h, post = (s[:, -1] for s in top_states(model, inputs))
+        hs.append(h)
+        posts.append(post)
+    return model.base.get_output_embeddings()(torch.stack(posts, dim=1))
 
 
 @pytest.mark.parametrize("k_prefill", [1, 2])
