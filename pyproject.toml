@@ -14,6 +14,7 @@ dependencies = ["torch>=2.4", "transformers>=5.0"]
 [project.optional-dependencies]
 test = ["pytest"]
 eval = ["lm-eval>=0.4.13"]
+sft = ["peft>=0.21", "datasets"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

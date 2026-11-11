@@ -1,7 +1,5 @@
 import pytest
 import torch
-from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
-from transformers import PreTrainedTokenizerFast
 
 from bitcycle.generate import generate, recurrent_nll, teacher_forced_logits
 
@@ -9,18 +7,6 @@ pytest.importorskip("lm_eval")
 from lm_eval.api.instance import Instance  # noqa: E402
 
 from bitcycle.harness import RecyclerEval  # noqa: E402
-
-CHARS = "abcdefghijklmnopqrstuvwxyz .,?!"
-
-
-@pytest.fixture
-def tok():
-    """One token per character, eos = 0; fits the test models' 64-token vocabulary."""
-    vocab = {"<eos>": 0, **{c: i + 1 for i, c in enumerate(CHARS)}}
-    t = Tokenizer(models.WordLevel(vocab, unk_token="<eos>"))
-    t.pre_tokenizer = pre_tokenizers.Split(Regex("."), "isolated")
-    t.decoder = decoders.Fuse()
-    return PreTrainedTokenizerFast(tokenizer_object=t, eos_token="<eos>", clean_up_tokenization_spaces=False)
 
 
 def requests(kind, arguments):

@@ -1,6 +1,8 @@
 import pytest
 import torch
-from transformers import AttentionInterface, AutoModelForCausalLM, BitNetConfig, LlamaConfig, Qwen2Config
+from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
+from transformers import (AttentionInterface, AutoModelForCausalLM, BitNetConfig, LlamaConfig,
+                          PreTrainedTokenizerFast, Qwen2Config)
 from transformers.masking_utils import AttentionMaskInterface, eager_mask
 
 from bitcycle.quant import to_bitlinear
@@ -89,6 +91,21 @@ def base(request):
 @pytest.fixture(params=["post_norm", "pre_norm"])
 def model(base, request):
     return randomize_adapter(RecyclerLM(base, recycle=request.param))
+
+
+def char_tokenizer():
+    """One token per character, eos = 0; fits the test models' 64-token vocabulary."""
+    chars = "abcdefghijklmnopqrstuvwxyz .,?!"
+    vocab = {"<eos>": 0, **{c: i + 1 for i, c in enumerate(chars)}}
+    t = Tokenizer(models.WordLevel(vocab, unk_token="<eos>"))
+    t.pre_tokenizer = pre_tokenizers.Split(Regex("."), "isolated")
+    t.decoder = decoders.Fuse()
+    return PreTrainedTokenizerFast(tokenizer_object=t, eos_token="<eos>", clean_up_tokenization_spaces=False)
+
+
+@pytest.fixture
+def tok():
+    return char_tokenizer()
 
 
 @pytest.fixture
