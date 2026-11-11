@@ -118,6 +118,7 @@ pip install -e ".[test,eval]" && pytest -q
 1. Gate 0: implementation and exactness tests (this release)
 2. Gate 1: tiny 2x2 study, {fp16, ternary} x {baseline, Recycler}
 3. Gate 2: retrofit BitNet b1.58 2B4T with an adapter-only SFT and evaluate on math and reasoning
+   (`scripts/sft.py`; `to_bitlinear` on the bf16 master weights is bit for bit transformers' BitNet quantizer)
 4. Gate 3: continued pretraining retrofit (compute permitting)
 5. Gate 4: CPU inference with bitnet.cpp
 
