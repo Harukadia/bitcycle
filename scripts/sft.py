@@ -10,7 +10,7 @@ Arms, trained on the same data for the same steps:
 The backbone is the bf16 master checkpoint made ternary by to_bitlinear, bit for bit
 transformers' own BitNet quantizer. Examples use lm-eval's gsm8k format; prompt positions get
 no loss and no recycled input, which is how generate(k_prefill=1) decodes. Only the arm's
-parameters train. Everything runs in float32 (see load_base); on a GPU with gradient checkpointing.
+parameters train. Everything runs in float32 (see load_base), with gradient checkpointing.
 Resumable like scripts/train.py; the log is JSONL in --out, the evaluation <run>_eval.json.
 """
 
@@ -199,8 +199,8 @@ def main() -> None:
     if cfg.arm == "base":
         model = RecyclerLM(base).to(cfg.device)  # zero adapter: exactly the base model
     else:
-        if cfg.device.startswith("cuda"):
-            base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        # Without it every BitLinear keeps its quantized weight for backward: a second copy per pass.
+        base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         model = make_model(cfg, base)
         if args.eval_only:
             state = torch.load(Path(cfg.out) / f"{cfg.name()}.pt", map_location=cfg.device)
