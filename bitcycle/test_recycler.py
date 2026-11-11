@@ -26,6 +26,16 @@ def test_pre_norm_recycles_the_state_before_the_final_norm(base, ids):
     assert torch.equal(logits, base(ids).logits)
 
 
+def test_a_float32_adapter_runs_on_a_lower_or_higher_precision_backbone(base, ids):
+    # Mixed precision: the trainable adapter stays float32 while the frozen backbone is not.
+    model = RecyclerLM(base)
+    model.adapter.float()
+    torch.nn.init.normal_(model.adapter.proj.weight, std=0.5)
+    logits, h, _ = model.pass_once(ids, recycle_shift(model.pass_once(ids)[1], model.adapter))
+    assert logits.dtype == h.dtype == torch.float64
+    assert recycle_shift(h, model.adapter).dtype == torch.float32
+
+
 def test_recycle_shift_feeds_previous_position(model, ids):
     _, h, _ = model.pass_once(ids, None)
     r = recycle_shift(h, model.adapter)
