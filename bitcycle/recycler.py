@@ -35,8 +35,12 @@ class RecyclerLM(nn.Module):
         weight = base.get_input_embeddings().weight
         self.adapter = RecycleAdapter(base.config.hidden_size).to(weight.device, weight.dtype)
 
-    def pass_once(self, input_ids, recycled=None, *, past_key_values=None, use_cache=False):
-        """One backbone pass. Returns (logits, the top-layer state to recycle, cache)."""
+    def pass_once(self, input_ids, recycled=None, *, attention_mask=None, position_ids=None,
+                  past_key_values=None, use_cache=False, logits_to_keep: int = 0):
+        """One backbone pass. Returns (logits, the top-layer state to recycle, cache).
+
+        logits_to_keep > 0 computes logits for only the last that many positions (0: all).
+        """
         x = self.base.get_input_embeddings()(input_ids)
         if recycled is not None:
             x = x + recycled
@@ -46,12 +50,14 @@ class RecyclerLM(nn.Module):
         if self.recycle == "pre_norm":
             hook = decoder.norm.register_forward_hook(lambda module, args, out: seen.append(args[0]))
         try:
-            out = decoder(inputs_embeds=x, past_key_values=past_key_values, use_cache=use_cache)
+            out = decoder(inputs_embeds=x, attention_mask=attention_mask, position_ids=position_ids,
+                          past_key_values=past_key_values, use_cache=use_cache)
         finally:
             if hook is not None:
                 hook.remove()
         top = out.last_hidden_state
-        return self.base.get_output_embeddings()(top), seen[0] if seen else top, out.past_key_values
+        logits = self.base.get_output_embeddings()(top[:, -logits_to_keep:])
+        return logits, seen[0] if seen else top, out.past_key_values
 
 
 def recycle_shift(h: torch.Tensor, adapter: RecycleAdapter, reset_mask=None) -> torch.Tensor:
