@@ -17,7 +17,8 @@ class RecycleAdapter(nn.Module):
         nn.init.zeros_(self.proj.weight)  # model == base model at init
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self.proj(self.norm(h))
+        # In the adapter's own dtype: it may train in float32 on a float16 backbone.
+        return self.proj(self.norm(h.to(self.proj.weight.dtype)))
 
 
 class RecyclerLM(nn.Module):
@@ -43,7 +44,7 @@ class RecyclerLM(nn.Module):
         """
         x = self.base.get_input_embeddings()(input_ids)
         if recycled is not None:
-            x = x + recycled
+            x = x + recycled.to(x.dtype)
         decoder = self.base.get_decoder()
         seen = []
         hook = None

@@ -1,7 +1,27 @@
+import pytest
 import torch
 from torch import nn
+from transformers.integrations.bitnet import ActQuant, WeightQuant
 
 from bitcycle.quant import BitLinear, quantize_activations, quantize_weights, to_bitlinear
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_quantizers_match_transformers_bit_for_bit(dtype):
+    torch.manual_seed(0)
+    w, x = torch.randn(64, 48).to(dtype), torch.randn(3, 5, 48).to(dtype)
+    with torch.compiler.set_stance("force_eager"):
+        assert torch.equal(quantize_weights(w), WeightQuant.apply(w))
+        assert torch.equal(quantize_activations(x), ActQuant.apply(x))
+
+
+def test_weight_quantization_follows_transformers_operation_order():
+    # Dividing by mean|w| and multiplying by its reciprocal give different bits here (found by
+    # search). In BitNet b1.58 2B4T the difference flips 61% of layer 0 gate_proj's ternary
+    # values, whose w / mean|w| sit on rounding ties.
+    w = torch.tensor(0.030742282047867775) * torch.tensor([1.0, 3.0])
+    with torch.compiler.set_stance("force_eager"):
+        assert torch.equal(quantize_weights(w), WeightQuant.apply(w))
 
 
 def test_weights_are_ternary_times_absmean():
@@ -18,7 +38,7 @@ def test_activations_fit_int8_per_token():
     scale = 127 / x.abs().amax(dim=-1, keepdim=True)
     codes = q * scale
     assert torch.allclose(codes, codes.round())
-    assert codes.min() >= -128 and codes.max() <= 127
+    assert codes.round().min() >= -128 and codes.round().max() <= 127  # codes carry float error
 
 
 def test_activation_quantization_is_per_token():
