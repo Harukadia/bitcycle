@@ -2,12 +2,14 @@
 
 Clones bitcycle and runs scripts/sft.py for every arm, one queue per GPU. Results land in
 /kaggle/working/results/gate2: training logs, the trainable parameters, <run>_eval.json.
-A session ends after 12 hours: rerun the kernel; training resumes and finished evaluations
-are skipped. Push with `kaggle kernels push -p kaggle/gate2` after adding a
-kernel-metadata.json (id, enable_gpu, enable_internet, machine_shape).
+A session ends after 12 hours: push again. Each version starts with an empty /kaggle/working,
+so kernel-metadata.json lists this kernel as its own source and the results of the last
+version are copied back first; training resumes and finished evaluations are skipped.
+Push with `kaggle kernels push -p kaggle/gate2`.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -20,6 +22,9 @@ STEPS = 2000
 SEEDS = [0]
 OUT = "/kaggle/working/results/gate2"
 
+last = next(Path("/kaggle/input").glob("**/results/gate2"), None)  # the last version's output
+if last:
+    shutil.copytree(last, OUT, dirs_exist_ok=True)
 if not Path("bitcycle").exists():
     subprocess.run(["git", "clone", "--depth", "1", "--branch", REF, "https://github.com/Harukadia/bitcycle"], check=True)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "bitcycle[eval,sft]"], check=True)

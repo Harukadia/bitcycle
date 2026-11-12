@@ -2,8 +2,7 @@
 
 Clones bitcycle, builds the TinyStories token arrays once, then trains every arm,
 one queue per GPU. Logs land in /kaggle/working/results/gate1 and come back with
-`kaggle kernels output <user>/<slug>`. Push with `kaggle kernels push -p kaggle/gate1`
-after adding a kernel-metadata.json (id, enable_gpu, enable_internet, machine_shape).
+`kaggle kernels output harukadia/bitcycle-gate1`. Push with `kaggle kernels push -p kaggle/gate1`.
 """
 
 import os
