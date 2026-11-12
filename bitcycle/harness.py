@@ -33,14 +33,33 @@ class RecyclerEval(LM):
         ctx = self.tokenizer(stripped).input_ids
         return (ctx, whole[len(ctx) :]) if ctx else ([self.tokenizer.eos_token_id], whole)
 
-    def _batched(self, items, run, length):
-        """run() on batches of items, longest first; results in the original order."""
+    def _batched(self, kind, requests, items, run, length):
+        """run() on batches of items, longest first; results in the original order.
+
+        A batch that runs out of GPU memory is retried at half the size, which then stays.
+        Each finished batch goes to lm-eval's response cache (simple_evaluate(use_cache=...)),
+        so an evaluation that is cut short resumes where it stopped.
+        """
         order = sorted(range(len(items)), key=lambda i: -length(items[i]))
         results = [None] * len(items)
-        for start in range(0, len(order), self.batch_size):
-            chunk = order[start : start + self.batch_size]
-            for i, result in zip(chunk, run([items[i] for i in chunk])):
+        start, size = 0, self.batch_size
+        while start < len(order):
+            chunk = order[start : start + size]
+            try:
+                out = run([items[i] for i in chunk])
+            except torch.OutOfMemoryError:
+                if size == 1:
+                    raise
+                out = None
+            if out is None:  # outside the handler, so the failed batch's tensors are already released
+                size //= 2
+                torch.cuda.empty_cache()
+                continue
+            for i, result in zip(chunk, out):
                 results[i] = result
+                self.cache_hook.add_partial(kind, requests[i].args, result)
+            start += len(chunk)
+            print(f"eval {start}/{len(order)} batch {size}", flush=True)
         return results
 
     def _padded(self, rows, width, length):
@@ -68,7 +87,7 @@ class RecyclerEval(LM):
 
     def loglikelihood(self, requests):
         pairs = [self._pair(*r.args) for r in requests]
-        return self._batched(pairs, self._score, lambda p: len(p[0]) + len(p[1]))
+        return self._batched("loglikelihood", requests, pairs, self._score, lambda p: len(p[0]) + len(p[1]))
 
     def _generate(self, jobs):
         width = max(len(c) for c, _ in jobs)
@@ -89,7 +108,7 @@ class RecyclerEval(LM):
 
     def generate_until(self, requests):
         jobs = [(self._context(context), kwargs) for context, kwargs in (r.args for r in requests)]
-        return self._batched(jobs, self._generate, lambda j: len(j[0]))
+        return self._batched("generate_until", requests, jobs, self._generate, lambda j: len(j[0]))
 
     def loglikelihood_rolling(self, requests):
         raise NotImplementedError("perplexity tasks are not used in bitcycle's evaluations")

@@ -51,6 +51,7 @@ class Config:
     eval_every: int = 500
     save_every: int = 200
     session_steps: int = 0  # stop after this many steps in this call; 0 = run to the end
+    checkpoint: int = 0  # 1 = gradient checkpointing: same gradients, less memory, slower
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     def name(self) -> str:
@@ -89,6 +90,8 @@ def make_model(cfg: Config) -> RecyclerLM:
     base = AutoModelForCausalLM.from_config(config)
     if cfg.precision == "ternary":
         to_bitlinear(base)
+    if cfg.checkpoint:
+        base.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model = RecyclerLM(base, recycle=cfg.recycle)
     if cfg.adapter == "ternary":
         to_bitlinear(model.adapter)

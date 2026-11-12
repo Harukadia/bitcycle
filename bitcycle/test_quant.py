@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from transformers.integrations.bitnet import ActQuant, WeightQuant
 
-from bitcycle.quant import BitLinear, quantize_activations, quantize_weights, to_bitlinear
+from bitcycle.quant import BitLinear, freeze_weights, quantize_activations, quantize_weights, to_bitlinear
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
@@ -65,3 +65,11 @@ def test_to_bitlinear_keeps_lm_head_full_precision():
     to_bitlinear(model)
     assert type(model["proj"]) is BitLinear
     assert type(model["lm_head"]) is nn.Linear
+
+
+def test_frozen_weights_give_the_same_output_bit_for_bit_without_requantizing():
+    layer = BitLinear(32, 16)
+    x = torch.randn(3, 32)
+    before = layer(x)
+    freeze_weights(layer)
+    assert torch.equal(layer(x), before)  # quantizing the stored weight again would change its scale

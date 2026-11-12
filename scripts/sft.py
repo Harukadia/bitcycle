@@ -26,7 +26,7 @@ from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from bitcycle.multipass import multi_pass_loss
-from bitcycle.quant import to_bitlinear
+from bitcycle.quant import freeze_weights, to_bitlinear
 from bitcycle.recycler import RecyclerLM
 
 LINEARS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -104,7 +104,7 @@ def make_model(cfg: Config, base: nn.Module) -> RecyclerLM:
 
 
 def load_base(name: str) -> nn.Module:
-    """bf16 master weights made ternary by to_bitlinear, in float32.
+    """bf16 master weights made ternary by to_bitlinear, in float32, quantized once (the backbone never trains).
 
     Not float16: on GSM8K text 2B4T's relu2(gate) * up reaches 1.7e10 and its residual stream
     1.6e5, past float16's 65504, so every logit is NaN. Kaggle's T4 and P100 have no bfloat16.
@@ -112,7 +112,7 @@ def load_base(name: str) -> nn.Module:
     """
     config = AutoConfig.from_pretrained(name)
     config.quantization_config = None
-    return to_bitlinear(AutoModelForCausalLM.from_pretrained(name, config=config, dtype=torch.float32))
+    return freeze_weights(to_bitlinear(AutoModelForCausalLM.from_pretrained(name, config=config, dtype=torch.float32)))
 
 
 def lr_at(cfg: Config, step: int) -> float:
@@ -177,11 +177,13 @@ def evaluate(cfg: Config, model: RecyclerLM, tokenizer) -> dict:
     from bitcycle.harness import RecyclerEval
 
     lm = RecyclerEval(model, tokenizer, batch_size=cfg.eval_batch, k_prefill=cfg.k_prefill)
-    res = lm_eval.simple_evaluate(model=lm, tasks=cfg.tasks.split(","), limit=cfg.eval_limit or None)
+    Path(cfg.out).mkdir(parents=True, exist_ok=True)
+    # The response cache makes a cut evaluation resume: only requests without an answer run again.
+    res =lm_eval.simple_evaluate(model=lm, tasks=cfg.tasks.split(","), limit=cfg.eval_limit or None,
+                                  use_cache=str(Path(cfg.out) / f"{cfg.name()}_eval"))
     row = {"run": cfg.name(), "arm": cfg.arm, "k_prefill": cfg.k_prefill, "limit": cfg.eval_limit,
            "results": res["results"]}
     path = Path(cfg.out) / f"{cfg.name()}_eval.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(row, indent=2, default=float), encoding="utf-8")
     return row
 
