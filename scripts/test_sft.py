@@ -5,6 +5,7 @@ import torch
 
 from bitcycle.conftest import char_tokenizer, make_base
 from bitcycle.generate import teacher_forced_logits
+from bitcycle.quant import freeze_weights
 from scripts.sft import Config, collate, format_example, lora_rank, make_model, train
 
 pytest.importorskip("peft")
@@ -93,3 +94,13 @@ def test_training_changes_only_the_arm_and_resumes_exactly(tmp_path):
     rows = [json.loads(line) for line in (tmp_path / "split" / f"{cfg.name()}.jsonl").read_text().splitlines()]
     assert sum(r["type"] == "config" for r in rows) == 1
     assert [r["step"] for r in rows if r["type"] == "train"] == [1, 2, 3, 4]
+
+
+def test_a_frozen_backbone_trains_the_same_arm(tmp_path):
+    runs = []
+    for name, prepare in (("plain", lambda base: base), ("frozen", freeze_weights)):
+        cfg = tiny(tmp_path / name, arm="adapter_lora")
+        runs.append(train(cfg, make_model(cfg, prepare(make_base("bitnet_ternary"))), data()))
+    for (n, p), q in zip(runs[0].named_parameters(), runs[1].parameters()):
+        if p.requires_grad:
+            assert torch.equal(p, q), n

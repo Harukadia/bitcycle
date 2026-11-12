@@ -42,3 +42,16 @@ def test_generate_until_decodes_greedily_and_cuts_at_the_stop_string(model, tok)
     lm = RecyclerEval(model, tok, batch_size=2)
     got = lm.generate_until(requests("generate_until", [(c, {"until": [stop], "max_gen_toks": 8}) for c in contexts]))
     assert got == [f.split(stop)[0] for f in free]
+
+
+def test_a_batch_that_runs_out_of_memory_is_retried_at_half_the_size(model, tok):
+    sizes = []
+
+    def run(items):
+        sizes.append(len(items))
+        if len(items) > 2:
+            raise torch.OutOfMemoryError
+        return items
+
+    assert RecyclerEval(model, tok, batch_size=4)._batched([3, 1, 2, 5, 4], run, lambda x: x) == [3, 1, 2, 5, 4]
+    assert sizes == [4, 2, 2, 1]

@@ -35,10 +35,26 @@ class BitLinear(nn.Linear):
     No RMSNorm is inserted: BitNet architectures already carry their sub-norms.
     """
 
+    frozen = False  # set by freeze_weights: the weight is already quantized
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + (quantize_activations(x) - x).detach()
-        w = self.weight + (quantize_weights(self.weight) - self.weight).detach()
+        w = self.weight if self.frozen else self.weight + (quantize_weights(self.weight) - self.weight).detach()
         return F.linear(x, w, self.bias)
+
+
+@torch.no_grad()
+def freeze_weights(model: nn.Module) -> nn.Module:
+    """Quantize every BitLinear weight once, in place, for a backbone that will not train.
+
+    The stored value is the one forward computed, so outputs stay bit for bit the same;
+    each forward then skips a pass over all the weights and its temporary copy.
+    """
+    for layer in model.modules():
+        if isinstance(layer, BitLinear):
+            layer.weight.copy_(layer.weight + (quantize_weights(layer.weight) - layer.weight))
+            layer.frozen = True
+    return model
 
 
 def to_bitlinear(model: nn.Module, skip: tuple[str, ...] = ("lm_head",)) -> nn.Module:

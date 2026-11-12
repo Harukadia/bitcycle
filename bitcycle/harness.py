@@ -34,13 +34,29 @@ class RecyclerEval(LM):
         return (ctx, whole[len(ctx) :]) if ctx else ([self.tokenizer.eos_token_id], whole)
 
     def _batched(self, items, run, length):
-        """run() on batches of items, longest first; results in the original order."""
+        """run() on batches of items, longest first; results in the original order.
+
+        A batch that runs out of GPU memory is retried at half the size, which then stays.
+        """
         order = sorted(range(len(items)), key=lambda i: -length(items[i]))
         results = [None] * len(items)
-        for start in range(0, len(order), self.batch_size):
-            chunk = order[start : start + self.batch_size]
-            for i, result in zip(chunk, run([items[i] for i in chunk])):
+        start, size = 0, self.batch_size
+        while start < len(order):
+            chunk = order[start : start + size]
+            try:
+                out = run([items[i] for i in chunk])
+            except torch.OutOfMemoryError:
+                if size == 1:
+                    raise
+                out = None
+            if out is None:  # outside the handler, so the failed batch's tensors are already released
+                size //= 2
+                torch.cuda.empty_cache()
+                continue
+            for i, result in zip(chunk, out):
                 results[i] = result
+            start += len(chunk)
+            print(f"eval {start}/{len(order)} batch {size}", flush=True)
         return results
 
     def _padded(self, rows, width, length):

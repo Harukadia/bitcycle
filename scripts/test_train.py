@@ -77,3 +77,12 @@ def test_run_log_records_config_training_and_final_eval(tmp_path):
     assert [r["step"] for r in rows if r["type"] == "train"] == [2, 4, 6]
     assert {"loss_1", "loss_2"} <= rows[1].keys()
     assert rows[-1]["type"] == "eval" and rows[-1]["step"] == 6
+
+
+def test_gradient_checkpointing_trains_the_same_model(tmp_path):
+    (inputs, reset), val = data()
+    plain = train(tiny(tmp_path / "a"), inputs, reset, val)
+    saving = train(tiny(tmp_path / "b", checkpoint=1), inputs, reset, val)
+    assert saving.base.is_gradient_checkpointing and not plain.base.is_gradient_checkpointing
+    for p, q in zip(plain.parameters(), saving.parameters()):
+        assert torch.allclose(p, q, atol=1e-5)
