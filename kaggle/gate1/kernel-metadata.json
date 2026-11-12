@@ -8,8 +8,8 @@
   "enable_gpu": true,
   "enable_internet": true,
   "machine_shape": "NvidiaTeslaT4",
-  "dataset_sources": [],
+  "dataset_sources": ["harukadia/bitcycle-gate1-results"],
   "competition_sources": [],
-  "kernel_sources": ["harukadia/bitcycle-gate1"],
+  "kernel_sources": [],
   "model_sources": []
 }

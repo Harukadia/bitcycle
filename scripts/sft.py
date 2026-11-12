@@ -177,11 +177,13 @@ def evaluate(cfg: Config, model: RecyclerLM, tokenizer) -> dict:
     from bitcycle.harness import RecyclerEval
 
     lm = RecyclerEval(model, tokenizer, batch_size=cfg.eval_batch, k_prefill=cfg.k_prefill)
-    res = lm_eval.simple_evaluate(model=lm, tasks=cfg.tasks.split(","), limit=cfg.eval_limit or None)
+    Path(cfg.out).mkdir(parents=True, exist_ok=True)
+    # The response cache makes a cut evaluation resume: only requests without an answer run again.
+    res =lm_eval.simple_evaluate(model=lm, tasks=cfg.tasks.split(","), limit=cfg.eval_limit or None,
+                                  use_cache=str(Path(cfg.out) / f"{cfg.name()}_eval"))
     row = {"run": cfg.name(), "arm": cfg.arm, "k_prefill": cfg.k_prefill, "limit": cfg.eval_limit,
            "results": res["results"]}
     path = Path(cfg.out) / f"{cfg.name()}_eval.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(row, indent=2, default=float), encoding="utf-8")
     return row
 

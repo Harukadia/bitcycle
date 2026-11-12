@@ -53,5 +53,33 @@ def test_a_batch_that_runs_out_of_memory_is_retried_at_half_the_size(model, tok)
             raise torch.OutOfMemoryError
         return items
 
-    assert RecyclerEval(model, tok, batch_size=4)._batched([3, 1, 2, 5, 4], run, lambda x: x) == [3, 1, 2, 5, 4]
+    reqs = requests("loglikelihood", [("a", "b")] * 5)
+    lm = RecyclerEval(model, tok, batch_size=4)
+    assert lm._batched("loglikelihood", reqs, [3, 1, 2, 5, 4], run, lambda x: x) == [3, 1, 2, 5, 4]
     assert sizes == [4, 2, 2, 1]
+
+
+def test_an_interrupted_evaluation_resumes_from_the_response_cache(model, tok, tmp_path):
+    from lm_eval.api.model import CachingLM
+
+    reqs = requests("loglikelihood", [("the cat", " sat"), ("a", " dog ran"), ("is it ", "here?"), ("", "hi")])
+    expected = RecyclerEval(model, tok, batch_size=2).loglikelihood(reqs)
+
+    def counting(lm, limit):
+        score, sizes = lm._score, []
+
+        def run(batch):
+            if len(sizes) == limit:
+                raise KeyboardInterrupt
+            sizes.append(len(batch))
+            return score(batch)
+
+        lm._score = run
+        return CachingLM(lm, str(tmp_path / "cache.db")), sizes
+
+    cut, _ = counting(RecyclerEval(model, tok, batch_size=2), limit=1)
+    with pytest.raises(KeyboardInterrupt):
+        cut.loglikelihood(reqs)
+    resumed, sizes = counting(RecyclerEval(model, tok, batch_size=2), limit=9)
+    assert resumed.loglikelihood(reqs) == expected
+    assert sizes == [2]  # the batch that finished before the cut is not run again
